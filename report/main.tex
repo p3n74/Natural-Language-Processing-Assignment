@@ -34,6 +34,34 @@ Our project began with a simple curiosity: how far can we get on \emph{Letterbox
 
 The remainder of the report follows the project rubric. Section~\ref{sec:problem} states the task precisely; Section~\ref{sec:data} describes data collection; Section~\ref{sec:cleaning} documents data cleaning; Section~\ref{sec:preprocess} covers text preprocessing; Section~\ref{sec:features} the feature design; Section~\ref{sec:models} model training and testing; Section~\ref{sec:eval} evaluation, accuracy, and error analysis; and Section~\ref{sec:conclude} concludes with limitations, future work, and a reflection on the engineering surprises along the way.
 
+\section{Pipeline Timeline}
+\label{sec:timeline}
+
+We kept a lab notebook (\path{notebooks/02_pipeline_timeline.ipynb}) that documents the questions, hypotheses, and decisions behind each stage of the pipeline. Table~\ref{tab:timeline} condenses that timeline into a single view so the workflow is easy to audit.
+
+\begin{table}[ht]
+  \centering
+  \footnotesize
+  \caption{Pipeline timeline distilled from the lab notebook.}
+  \label{tab:timeline}
+  \begin{tabularx}{\linewidth}{@{}clX@{}}
+    \toprule
+    Stage & Focus & Outcome \\
+    \midrule
+    1 & Setup & Pin project root, install NLTK corpora, validate paths. \\
+    2 & Raw data audit & Confirm 90{,}016 rows, star-glyph ratings, heavy class skew. \\
+    3 & Cleaning & Drop blanks/duplicates/ambiguous ratings; downsample to balanced 3{,}376 reviews. \\
+    4 & Split & Stratified 80/10/10; test set 169/169. \\
+    5 & Preprocess & Lowercase, regex cleanup, stopwords, lemmatise; token count halves. \\
+    6 & Features & TF-IDF/BoW with unigrams+bigrams; inspect vocabulary. \\
+    7 & Training & 5-fold CV over $C/\alpha$ and n-gram range. \\
+    8 & Evaluation & Test metrics, ROC AUC, and confusion matrices. \\
+    9 & Errors & Qualitative review of 50 misclassifications. \\
+    10 & Synthesis & Compare models, document limitations and next steps. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
 \section{Problem Definition}
 \label{sec:problem}
 
@@ -90,14 +118,16 @@ Preprocessing in our pipeline is deliberately conservative. The classical sentim
   \item Tokens are lemmatised with the WordNet lemmatiser~\citep{miller_1995} to fold inflections (\textit{performances}~$\to$~\textit{performance}). We picked lemmatisation over Porter stemming~\citep{porter_1980} because it produces real English words and we wanted human-readable feature names for error analysis.
 \end{itemize}
 
-\textbf{Why these choices?} Lowercasing and lemmatisation cut vocabulary roughly by half, which improves the statistical reliability of TF-IDF weights on a small corpus, exactly the regime studied by~\citet{salton_buckley_1988}. We deliberately do \emph{not} normalise negation (e.g., concatenating ``not\_good'' as a single token) even though~\citet{pang_lee_vaithyanathan_2002} recommend it for unigram models, because we offset that loss by including bigrams in the vectoriser, which captures the same information end-to-end. The error analysis in Section~\ref{sec:eval} confirms that residual negation cases are still our weakest spot, which is the trade-off this choice implies.
+\textbf{Observed impact.} On the training split, mean token count drops from 172.8 raw tokens to 92.9 after cleaning ($\approx 54\%$ reduction). We keep the default NLTK stopword list, which removes negators such as ``not'' and ``no''; this is a known weakness we accept for now, while bigrams still capture other short-range polarity cues.
+
+\textbf{Why these choices?} Lowercasing and lemmatisation cut vocabulary roughly by half, which improves the statistical reliability of TF-IDF weights on a small corpus, exactly the regime studied by~\citet{salton_buckley_1988}. We deliberately do \emph{not} normalise negation (e.g., concatenating ``not\_good'' as a single token) even though~\citet{pang_lee_vaithyanathan_2002} recommend it for unigram models; coupled with the default stopword list, this means explicit negators are often removed. We accept that limitation and flag it in the error analysis, with explicit negation handling left for future work.
 
 \section{Feature Engineering}
 \label{sec:features}
 
 We compare two sparse representations on top of the same preprocessing.
 
-\textbf{TF-IDF (primary).} Term frequencies are weighted by inverse document frequency with sublinear TF scaling and an L2-normalised output, which is the standard formulation of~\citet{salton_buckley_1988}. We use unigrams \emph{and} bigrams (\texttt{ngram\_range=(1,2)}), capped at 50{,}000 features and \texttt{min\_df=3} to discard near-singleton terms. The decision to add bigrams was a direct response to~\citet{wang_manning_2012}'s finding that bigrams are the single biggest classical lever on sentiment tasks because they capture polarity-bearing collocations (``not bad'', ``waste time'', ``deeply moving'') that unigrams miss. Our cross-validation later picked bigram-enabled vectorisers for every pipeline, which corroborated their result.
+\textbf{TF-IDF (primary).} Term frequencies are weighted by inverse document frequency with sublinear TF scaling and an L2-normalised output, which is the standard formulation of~\citet{salton_buckley_1988}. We use unigrams \emph{and} bigrams (\texttt{ngram\_range=(1,2)}), capped at 50{,}000 features and \texttt{min\_df=3} to discard near-singleton terms. On the training split this yields 15{,}925 TF-IDF features (matrix shape $2700 \times 15925$). The decision to add bigrams was a direct response to~\citet{wang_manning_2012}'s finding that bigrams are the single biggest classical lever on sentiment tasks because they capture polarity-bearing collocations (``not bad'', ``waste time'', ``deeply moving'') that unigrams miss. Our cross-validation later picked bigram-enabled vectorisers for every pipeline, which corroborated their result.
 
 \textbf{Bag-of-words baseline.} Raw counts under the same vocabulary settings, supplied to multinomial Na\"ive Bayes. This baseline isolates the contribution of TF-IDF weighting versus pure counts. We included it precisely because~\citet{wang_manning_2012} argue that na\"ively switching to TF-IDF doesn't always help NB --- so we wanted to measure the effect ourselves rather than assume it.
 
@@ -194,6 +224,8 @@ Aggregate test-set metrics are summarised in Table~\ref{tab:metrics} and compare
 
 The patterns are exactly the ones~\citet{pang_lee_2008} catalogue as the hard cases for bag-of-words sentiment classifiers: sarcasm and contrast (\textit{``so good it's actually rather cringe''}) confuse models that discard word order; reviews that praise dark or violent content (\textit{``physically sick \dots one of them''}) are systematically read as negative because the surface vocabulary is negative; very short reviews give too few tokens for a confident posterior; and non-English tokens completely bypass our English vocabulary. Each of these is a known open problem in the classical literature, which is part of why~\citet{maas_imdb_2011} introduced learned word vectors and why~\citet{devlin_bert_2019} eventually replaced sparse features altogether.
 
+\textbf{Reproducibility.} All processed CSVs, trained models, and figures can be regenerated with \texttt{make data \&\& make train \&\& make evaluate \&\& make errors \&\& make report} from the repository root.
+
 \section{Conclusions}
 \label{sec:conclude}
 
@@ -206,6 +238,30 @@ The patterns are exactly the ones~\citet{pang_lee_2008} catalogue as the hard ca
 \textbf{Meaningful future improvements.} (i) Train on the unrestricted 90k export plus the companion ``Worst 250'' dataset to widen the negative-vocabulary distribution. (ii) Add a neutral class for 2.5--3.5-star reviews so the model can express genuine uncertainty rather than being forced to a binary call --- this is the same three-way framing used by~\citet{pang_lee_vaithyanathan_2002}. (iii) Replace the sparse vectoriser with pretrained word embeddings such as Word2Vec~\citep{mikolov_2013} or sentence embeddings derived from a small transformer (DistilBERT, following~\citet{devlin_bert_2019} and the protocol of~\citet{maas_imdb_2011}) to compare against a stronger upper bound. (iv) Add a language-identification pre-filter and route non-English reviews to a multilingual encoder. (v) Calibrate decision thresholds explicitly for asymmetric error costs.
 
 \textbf{Reflection on challenges.} The two notable engineering wrinkles were (a) parsing the dataset's Unicode star encoding, which silently fails when treated as numeric and almost cost us our entire label set; and (b) the very strong positive class skew of the Top-250 cut, which forced us to redesign the balancing rule from ``cap each class at $N$'' to ``cap both classes at the smaller class count''. Both issues are now caught at load time and reported in the cleaning audit, which is exactly the discipline~\citet{pang_lee_2008} advocate when working with star-derived sentiment labels.
+
+\section{Contributions}
+\label{sec:contrib}
+
+\begin{table}[ht]
+  \centering
+  \footnotesize
+  \caption{Team contributions for the Letterboxd sentiment project.}
+  \label{tab:contrib}
+  \begin{tabularx}{\linewidth}{@{}r l X r@{}}
+    \toprule
+    No. & Name & Task & Contribution (\%) \\
+    \midrule
+    1 & Nikolai Tristan Pazon & Data preparation, dataset checking, and cleaning support & 25 \\
+    2 & Heart Alvern Sumicad & Text preprocessing, feature engineering, and documentation support & 25 \\
+    3 & Jade De Paz & Model training, testing, and evaluation support & 25 \\
+    4 & Rameses Luis C. Barria & Error analysis, interpretation of results, and notebook/report polishing & 25 \\
+    \midrule
+    \multicolumn{3}{r}{\textbf{Total}} & \textbf{100} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+This project was completed collaboratively, with each member contributing across data preparation, preprocessing, model development, evaluation, and the final write-up.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
